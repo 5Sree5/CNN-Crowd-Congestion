@@ -14,12 +14,12 @@ import os
 HEAD_MODEL_PATH = r"C:\Users\srees\LSTM\best.pt"           
 BODY_MODEL_PATH = r"C:\Users\srees\LSTM\yolov8n.pt"       
 LSTM_MODEL_DIR = r"C:\Users\srees\LSTM\congestion_prediction\models"
-VIDEO_SOURCE = r"C:\Users\srees\LSTM\c1.mp4"
+VIDEO_SOURCE = r"C:\Users\srees\LSTM\c1.mp4"  # 0 for webcam, or r"C:\path\to\video.mp4"
 
 # ============================================================================
 # SETTINGS
 # ============================================================================
-ALERT_THRESHOLD = 0.76
+ALERT_THRESHOLD = 0.73   # for console alert
 ROI_AREA = 100.0
 
 # ============================================================================
@@ -49,6 +49,10 @@ prev_density = 0.0
 prev_speed = 0.0
 alert_active = False
 FPS = 30
+
+# New for high‑risk popup
+high_risk_start_time = None
+popup_shown = False
 
 # ============================================================================
 # IoU FUNCTION (from your YOLO code)
@@ -142,14 +146,49 @@ while True:
         seq_norm = scaler.transform(seq.reshape(-1, len(FEATURE_COLS))).reshape(1, LOOKBACK_FRAMES, -1)
         lstm_prob = lstm_model.predict(seq_norm, verbose=0)[0, 0]
         
-        # Alert
+        # Console alert (80% threshold)
         if lstm_prob >= ALERT_THRESHOLD and not alert_active:
             print(f"🚨 ALERT! Congestion in 60s (prob={lstm_prob:.2f})")
             alert_active = True
         elif lstm_prob < ALERT_THRESHOLD and alert_active:
             print(f"✅ Alert cleared")
             alert_active = False
-    
+        
+        # NEW: Popup when risk > 73% for 3 seconds
+                # NEW: Popup when risk > 73% for 2.5 seconds
+        HIGH_RISK_THRESHOLD = 0.73
+        if lstm_prob >= HIGH_RISK_THRESHOLD:
+            if high_risk_start_time is None:
+                high_risk_start_time = time.time()
+                print(f"[DEBUG] High risk started at {high_risk_start_time:.1f}")
+            else:
+                elapsed = time.time() - high_risk_start_time
+                print(f"[DEBUG] High risk sustained: {elapsed:.2f}s / 2.5s")
+                if elapsed >= 2.5 and not popup_shown:
+                    print("[DEBUG] Triggering popup now!")
+                    popup_shown = True
+                    
+                    # Create a popup window
+                    popup_frame = frame.copy()
+                    cv2.putText(popup_frame, "WARNING: Congestion likely in 60s!", 
+                                (50, popup_frame.shape[0]//2), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,0,255), 3)
+                    cv2.putText(popup_frame, "If this pattern continues...", 
+                                (50, popup_frame.shape[0]//2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+                    cv2.putText(popup_frame, "Press any key to resume monitoring", 
+                                (50, popup_frame.shape[0]//2 + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+                    
+                    cv2.imshow('Crowd Congestion Predictor', popup_frame)
+                    print("[DEBUG] Popup displayed. Waiting for key press...")
+                    cv2.waitKey(0)  # Wait indefinitely
+                    print("[DEBUG] Key pressed. Resuming...")
+                    high_risk_start_time = None
+                    popup_shown = False
+        else:
+            if high_risk_start_time is not None:
+                print("[DEBUG] Risk dropped below threshold. Resetting timer.")
+            high_risk_start_time = None
+            popup_shown = False
+
     # -------- DRAW ON FRAME --------
     for box in body_boxes:
         x1, y1, x2, y2 = map(int, box)
@@ -168,6 +207,13 @@ while True:
     else:
         cv2.putText(frame, f"Buffer: {len(feature_buffer)}/{LOOKBACK_FRAMES}", (20, 150), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200,200,200), 2)
+    
+    # Show high‑risk timer if active
+    if high_risk_start_time is not None:
+        elapsed = time.time() - high_risk_start_time
+        if elapsed < 2.0:
+            timer_text = f"High risk sustained: {elapsed:.1f}s / 2.0s"
+            cv2.putText(frame, timer_text, (20, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,165,255), 2)
     
     cv2.imshow('Crowd Congestion Predictor', frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
